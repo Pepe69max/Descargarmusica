@@ -115,16 +115,15 @@ function broadcastUpdate(type, data) {
 }
 
 // Verificar si yt-dlp está instalado
+// Reemplazar la función checkYtDlp existente con esta versión mejorada:
 async function checkYtDlp() {
     try {
-        const { stdout } = await execAsync('which yt-dlp');
-        console.log(`✅ yt-dlp encontrado en: ${stdout.trim()}`);
-        
-        const { stdout: version } = await execAsync('yt-dlp --version');
-        console.log(`✅ yt-dlp version: ${version.trim()}`);
-        return true;
+        // Primero intentar con yt-dlp directamente
+        const { stdout } = await execAsync('yt-dlp --version');
+        console.log(`✅ yt-dlp version: ${stdout.trim()}`);
+        return 'direct';
     } catch (error) {
-        console.error('❌ yt-dlp no encontrado:', error.message);
+        console.log('yt-dlp directo no encontrado, intentando con python3...');
         
         // Intentar con python3 -m yt_dlp
         try {
@@ -132,8 +131,18 @@ async function checkYtDlp() {
             console.log(`✅ yt-dlp via python3: ${stdout.trim()}`);
             return 'python3';
         } catch (pythonError) {
-            console.error('❌ yt-dlp tampoco disponible via python3');
-            return false;
+            console.log('Intentando instalar yt-dlp...');
+            
+            // Intentar instalar yt-dlp
+            try {
+                await execAsync('pip3 install --user yt-dlp');
+                const { stdout } = await execAsync('python3 -m yt_dlp --version');
+                console.log(`✅ yt-dlp instalado y funcionando: ${stdout.trim()}`);
+                return 'python3';
+            } catch (installError) {
+                console.error('❌ No se pudo instalar yt-dlp:', installError.message);
+                return false;
+            }
         }
     }
 }
@@ -181,22 +190,25 @@ async function installYtDlp() {
 // Obtener información del video con timeout
 async function getVideoInfo(url) {
     try {
-        // Determinar comando según disponibilidad
         const ytdlpAvailable = await checkYtDlp();
         let command;
         
-        if (ytdlpAvailable === 'python3') {
-            command = `timeout 30 python3 -m yt_dlp --dump-json --no-playlist "${url}"`;
-        } else if (ytdlpAvailable === true) {
-            command = `timeout 30 yt-dlp --dump-json --no-playlist "${url}"`;
-        } else {
-            throw new Error('yt-dlp no está disponible en el servidor');
+        switch (ytdlpAvailable) {
+            case 'direct':
+                command = `timeout 30 yt-dlp --dump-json --no-playlist "${url}"`;
+                break;
+            case 'python3':
+                command = `timeout 30 python3 -m yt_dlp --dump-json --no-playlist "${url}"`;
+                break;
+            default:
+                throw new Error('yt-dlp no está disponible en el servidor. Verifica la instalación.');
         }
         
+        console.log(`Ejecutando: ${command}`);
         const { stdout } = await execAsync(command);
         const info = JSON.parse(stdout);
         
-        // Validar duración para Railway/Render
+        // Validar duración
         if (info.duration && info.duration > MAX_DURATION) {
             throw new Error(`Video demasiado largo. Máximo ${MAX_DURATION/60} minutos permitidos.`);
         }
@@ -210,6 +222,7 @@ async function getVideoInfo(url) {
             formats: info.formats?.filter(f => f.acodec !== 'none').slice(0, 5) || []
         };
     } catch (error) {
+        console.error('Error en getVideoInfo:', error.message);
         throw new Error(`Error obteniendo información del video: ${error.message}`);
     }
 }
@@ -227,88 +240,103 @@ async function downloadMedia(url, options, downloadId) {
     return new Promise(async (resolve, reject) => {
         const { quality, format, isPlaylist } = options;
         
-        // Determinar comando según disponibilidad
-        const ytdlpAvailable = await checkYtDlp();
-        let baseCommand;
-        
-        if (ytdlpAvailable === 'python3') {
-            baseCommand = 'python3 -m yt_dlp';
-        } else if (ytdlpAvailable === true) {
-            baseCommand = 'yt-dlp';
-        } else {
-            return reject(new Error('yt-dlp no está disponible en el servidor'));
-        }
-        
-        // Construir comando completo
-        let command = [
-            baseCommand.split(' ')[0],
-            ...(baseCommand.includes(' ') ? baseCommand.split(' ').slice(1) : []),
-            '--extract-audio',
-            `--audio-format=${format}`,
-            `--audio-quality=${quality}`,
-            '--output', path.join(DOWNLOADS_DIR, '%(title).100s.%(ext)s'),
-            '--no-mtime',
-            '--embed-thumbnail',
-            '--embed-metadata',
-            '--add-metadata',
-            `--max-filesize=${MAX_FILE_SIZE}`,
-            '--abort-on-error'
-        ];
-
-        if (isPlaylist) {
-            command.push('--yes-playlist', '--max-downloads=5');
-        } else {
-            command.push('--no-playlist');
-        }
-
-        command.push(url);
-
-        const process = spawn(command[0], command.slice(1), {
-            timeout: 300000 // 5 minutos timeout
-        });
-        
-        let output = '';
-        let errorOutput = '';
-
-        process.stdout.on('data', (data) => {
-            const text = data.toString();
-            output += text;
+        try {
+            const ytdlpAvailable = await checkYtDlp();
+            let baseCommand = [];
             
-            // Parsear progreso
-            const progressMatch = text.match(/\[download\]\s+(\d+\.?\d*)%/);
-            if (progressMatch) {
-                const progress = parseFloat(progressMatch[1]);
-                broadcastUpdate('progress', {
-                    downloadId,
-                    progress,
-                    status: 'downloading'
-                });
+            switch (ytdlpAvailable) {
+                case 'direct':
+                    baseCommand = ['yt-dlp'];
+                    break;
+                case 'python3':
+                    baseCommand = ['python3', '-m', 'yt_dlp'];
+                    break;
+                default:
+                    return reject(new Error('yt-dlp no está disponible en el servidor'));
             }
-        });
+            
+            const command = [
+                ...baseCommand,
+                '--extract-audio',
+                `--audio-format=${format}`,
+                `--audio-quality=${quality}`,
+                '--output', path.join(DOWNLOADS_DIR, '%(title).100s.%(ext)s'),
+                '--no-mtime',
+                '--embed-thumbnail',
+                '--embed-metadata',
+                '--add-metadata',
+                `--max-filesize=${MAX_FILE_SIZE}`,
+                '--abort-on-error',
+                '--no-check-certificate', // Para evitar problemas SSL en algunos entornos
+                '--socket-timeout', '30'
+            ];
 
-        process.stderr.on('data', (data) => {
-            errorOutput += data.toString();
-        });
-
-        process.on('close', (code) => {
-            if (code === 0) {
-                broadcastUpdate('progress', {
-                    downloadId,
-                    progress: 100,
-                    status: 'completed'
-                });
-                resolve({ success: true, output });
+            if (isPlaylist) {
+                command.push('--yes-playlist', '--max-downloads=3'); // Reducido para Render
             } else {
-                reject(new Error(`yt-dlp falló con código ${code}: ${errorOutput}`));
+                command.push('--no-playlist');
             }
-        });
 
-        process.on('error', (error) => {
-            reject(new Error(`Error ejecutando yt-dlp: ${error.message}`));
-        });
+            command.push(url);
 
-        // Guardar referencia del proceso para poder cancelarlo
-        activeDownloads.set(downloadId, process);
+            console.log(`Ejecutando descarga: ${command.join(' ')}`);
+            
+            const process = spawn(command[0], command.slice(1), {
+                timeout: 600000, // 10 minutos timeout
+                env: { ...process.env, PYTHONPATH: '/opt/venv/lib/python3.9/site-packages' }
+            });
+            
+            let output = '';
+            let errorOutput = '';
+
+            process.stdout.on('data', (data) => {
+                const text = data.toString();
+                output += text;
+                console.log('STDOUT:', text);
+                
+                // Parsear progreso
+                const progressMatch = text.match(/\[download\]\s+(\d+\.?\d*)%/);
+                if (progressMatch) {
+                    const progress = parseFloat(progressMatch[1]);
+                    broadcastUpdate('progress', {
+                        downloadId,
+                        progress,
+                        status: 'downloading'
+                    });
+                }
+            });
+
+            process.stderr.on('data', (data) => {
+                const text = data.toString();
+                errorOutput += text;
+                console.error('STDERR:', text);
+            });
+
+            process.on('close', (code) => {
+                console.log(`Proceso terminado con código: ${code}`);
+                if (code === 0) {
+                    broadcastUpdate('progress', {
+                        downloadId,
+                        progress: 100,
+                        status: 'completed'
+                    });
+                    resolve({ success: true, output });
+                } else {
+                    reject(new Error(`yt-dlp falló con código ${code}: ${errorOutput}`));
+                }
+            });
+
+            process.on('error', (error) => {
+                console.error('Error del proceso:', error);
+                reject(new Error(`Error ejecutando yt-dlp: ${error.message}`));
+            });
+
+            // Guardar referencia del proceso
+            activeDownloads.set(downloadId, process);
+            
+        } catch (error) {
+            reject(new Error(`Error configurando descarga: ${error.message}`));
+        }
     });
 }
 
