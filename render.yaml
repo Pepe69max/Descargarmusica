@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: ytdlp-downloader
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter # o el plan que prefieras
+    region: ohio # o tu región preferida
+    buildFilter:
+      paths:
+      - "**"
+      ignoredPaths: []
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: RENDER
+        value: true
+      - key: MAX_CONCURRENT_DOWNLOADS
+        value: 1
+      - key: MAX_FILE_SIZE
+        value: 25M
+    healthCheckPath: /health
+    scaling:
+      minInstances: 1
+      maxInstances: 1
+    disk:
+      name: ytdlp-storage
+      mountPath: /tmp/downloads
+      sizeGB: 1
