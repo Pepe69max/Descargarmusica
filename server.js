@@ -13,15 +13,38 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Configuración
-const PORT = process.env.PORT || 3001;
-const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
-const MAX_CONCURRENT_DOWNLOADS = 3;
+// Configuración para Railway
+const PORT = process.env.PORT || 3000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const RAILWAY_ENVIRONMENT = process.env.RAILWAY_ENVIRONMENT || 'development';
+
+// Directorio de descargas - usar /tmp en Railway para archivos temporales
+const DOWNLOADS_DIR = NODE_ENV === 'production' 
+    ? '/tmp/downloads' 
+    : path.join(__dirname, 'downloads');
+
+const MAX_CONCURRENT_DOWNLOADS = 2; // Reducido para Railway
+const MAX_FILE_SIZE = '50M'; // Límite de tamaño para Railway
+const MAX_DURATION = 3600; // 1 hora máximo
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+    origin: NODE_ENV === 'production' 
+        ? process.env.FRONTEND_URL || true
+        : '*',
+    credentials: true
+}));
+
+app.use(express.json({ limit: '10mb' }));
 app.use('/downloads', express.static(DOWNLOADS_DIR));
+
+// Trust proxy para Railway
+app.set('trust proxy', 1);
+
+// Health check para Railway
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
 // Estado global
 let downloadQueue = [];
@@ -35,6 +58,28 @@ async function ensureDownloadsDir() {
         await fs.access(DOWNLOADS_DIR);
     } catch {
         await fs.mkdir(DOWNLOADS_DIR, { recursive: true });
+        console.log(`📁 Directorio de descargas creado: ${DOWNLOADS_DIR}`);
+    }
+}
+
+// Limpiar archivos antiguos (importante para Railway)
+async function cleanupOldFiles() {
+    try {
+        const files = await fs.readdir(DOWNLOADS_DIR);
+        const now = Date.now();
+        const maxAge = 2 * 60 * 60 * 1000; // 2 horas
+
+        for (const file of files) {
+            const filePath = path.join(DOWNLOADS_DIR, file);
+            const stats = await fs.stat(filePath);
+            
+            if (now - stats.mtime.getTime() > maxAge) {
+                await fs.unlink(filePath);
+                console.log(`🗑️ Archivo antiguo eliminado: ${file}`);
+            }
+        }
+    } catch (error) {
+        console.error('Error limpiando archivos:', error.message);
     }
 }
 
@@ -47,6 +92,11 @@ wss.on('connection', (ws) => {
         connectedClients.delete(ws);
         console.log('Cliente desconectado');
     });
+
+    ws.on('error', (error) => {
+        console.error('Error WebSocket:', error.message);
+        connectedClients.delete(ws);
+    });
 });
 
 // Función para enviar actualizaciones a todos los clientes
@@ -54,7 +104,12 @@ function broadcastUpdate(type, data) {
     const message = JSON.stringify({ type, data });
     connectedClients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
+            try {
+                client.send(message);
+            } catch (error) {
+                console.error('Error enviando mensaje WebSocket:', error.message);
+                connectedClients.delete(client);
+            }
         }
     });
 }
@@ -62,20 +117,39 @@ function broadcastUpdate(type, data) {
 // Verificar si yt-dlp está instalado
 async function checkYtDlp() {
     try {
-        await execAsync('yt-dlp --version');
+        const { stdout } = await execAsync('yt-dlp --version');
+        console.log(`✅ yt-dlp version: ${stdout.trim()}`);
         return true;
     } catch (error) {
-        console.error('yt-dlp no está instalado o no está en el PATH');
+        console.error('❌ yt-dlp no está instalado o no está en el PATH');
         return false;
     }
 }
 
-// Obtener información del video
+// Instalar yt-dlp si no está disponible (para Railway)
+async function installYtDlp() {
+    try {
+        console.log('📦 Instalando yt-dlp...');
+        await execAsync('pip install yt-dlp');
+        console.log('✅ yt-dlp instalado correctamente');
+        return true;
+    } catch (error) {
+        console.error('❌ Error instalando yt-dlp:', error.message);
+        return false;
+    }
+}
+
+// Obtener información del video con timeout
 async function getVideoInfo(url) {
     try {
-        const command = `yt-dlp --dump-json --no-playlist "${url}"`;
+        const command = `timeout 30 yt-dlp --dump-json --no-playlist "${url}"`;
         const { stdout } = await execAsync(command);
         const info = JSON.parse(stdout);
+        
+        // Validar duración para Railway
+        if (info.duration && info.duration > MAX_DURATION) {
+            throw new Error(`Video demasiado largo. Máximo ${MAX_DURATION/60} minutos permitidos.`);
+        }
         
         return {
             title: info.title,
@@ -98,33 +172,38 @@ function formatDuration(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// Descargar video/audio
+// Descargar video/audio con límites para Railway
 async function downloadMedia(url, options, downloadId) {
     return new Promise((resolve, reject) => {
         const { quality, format, isPlaylist } = options;
         
-        // Construir comando yt-dlp
+        // Construir comando yt-dlp con límites para Railway
         let command = [
             'yt-dlp',
             '--extract-audio',
             `--audio-format=${format}`,
             `--audio-quality=${quality}`,
-            '--output', path.join(DOWNLOADS_DIR, '%(title)s.%(ext)s'),
+            '--output', path.join(DOWNLOADS_DIR, '%(title).100s.%(ext)s'), // Limitar nombre
             '--no-mtime',
             '--embed-thumbnail',
             '--embed-metadata',
-            '--add-metadata'
+            '--add-metadata',
+            `--max-filesize=${MAX_FILE_SIZE}`,
+            '--abort-on-error'
         ];
 
         if (isPlaylist) {
-            command.push('--yes-playlist');
+            command.push('--yes-playlist', '--max-downloads=5'); // Limitar playlist
         } else {
             command.push('--no-playlist');
         }
 
         command.push(url);
 
-        const process = spawn(command[0], command.slice(1));
+        const process = spawn(command[0], command.slice(1), {
+            timeout: 300000 // 5 minutos timeout
+        });
+        
         let output = '';
         let errorOutput = '';
 
@@ -161,6 +240,10 @@ async function downloadMedia(url, options, downloadId) {
             }
         });
 
+        process.on('error', (error) => {
+            reject(new Error(`Error ejecutando yt-dlp: ${error.message}`));
+        });
+
         // Guardar referencia del proceso para poder cancelarlo
         activeDownloads.set(downloadId, process);
     });
@@ -173,9 +256,12 @@ app.get('/api/status', async (req, res) => {
     const ytDlpAvailable = await checkYtDlp();
     res.json({
         status: 'ok',
+        environment: NODE_ENV,
+        railway: RAILWAY_ENVIRONMENT,
         ytDlpAvailable,
         activeDownloads: activeDownloads.size,
-        queueLength: downloadQueue.length
+        queueLength: downloadQueue.length,
+        downloadsDir: DOWNLOADS_DIR
     });
 });
 
@@ -188,9 +274,15 @@ app.post('/api/video-info', async (req, res) => {
             return res.status(400).json({ error: 'URL es requerida' });
         }
 
+        // Validar URL básica
+        if (!url.match(/^https?:\/\//)) {
+            return res.status(400).json({ error: 'URL inválida' });
+        }
+
         const info = await getVideoInfo(url);
         res.json(info);
     } catch (error) {
+        console.error('Error obteniendo info:', error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -202,6 +294,11 @@ app.post('/api/download', async (req, res) => {
         
         if (!url) {
             return res.status(400).json({ error: 'URL es requerida' });
+        }
+
+        // Limitar cola para Railway
+        if (downloadQueue.length >= 10) {
+            return res.status(429).json({ error: 'Cola llena. Intenta más tarde.' });
         }
 
         const downloadId = `download_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -227,6 +324,7 @@ app.post('/api/download', async (req, res) => {
             position: downloadQueue.length 
         });
     } catch (error) {
+        console.error('Error agregando descarga:', error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -236,7 +334,7 @@ app.get('/api/queue', (req, res) => {
     res.json({
         queue: downloadQueue,
         active: Array.from(activeDownloads.keys()),
-        history: downloadHistory.slice(-20) // Últimas 20 descargas
+        history: downloadHistory.slice(-20)
     });
 });
 
@@ -244,30 +342,40 @@ app.get('/api/queue', (req, res) => {
 app.delete('/api/download/:downloadId', (req, res) => {
     const { downloadId } = req.params;
     
-    // Cancelar descarga activa
-    if (activeDownloads.has(downloadId)) {
-        const process = activeDownloads.get(downloadId);
-        process.kill('SIGTERM');
-        activeDownloads.delete(downloadId);
+    try {
+        // Cancelar descarga activa
+        if (activeDownloads.has(downloadId)) {
+            const process = activeDownloads.get(downloadId);
+            process.kill('SIGTERM');
+            activeDownloads.delete(downloadId);
+            
+            broadcastUpdate('cancelled', { downloadId });
+        }
         
-        broadcastUpdate('cancelled', { downloadId });
+        // Remover de la cola
+        downloadQueue = downloadQueue.filter(item => item.id !== downloadId);
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error cancelando descarga:', error.message);
+        res.status(500).json({ error: error.message });
     }
-    
-    // Remover de la cola
-    downloadQueue = downloadQueue.filter(item => item.id !== downloadId);
-    
-    res.json({ success: true });
 });
 
 // Limpiar cola
 app.delete('/api/queue', (req, res) => {
-    // Solo permitir si no hay descargas activas
-    if (activeDownloads.size > 0) {
-        return res.status(400).json({ error: 'No se puede limpiar la cola con descargas activas' });
+    try {
+        // Solo permitir si no hay descargas activas
+        if (activeDownloads.size > 0) {
+            return res.status(400).json({ error: 'No se puede limpiar la cola con descargas activas' });
+        }
+        
+        downloadQueue = [];
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error limpiando cola:', error.message);
+        res.status(500).json({ error: error.message });
     }
-    
-    downloadQueue = [];
-    res.json({ success: true });
 });
 
 // Listar archivos descargados
@@ -276,19 +384,25 @@ app.get('/api/downloads', async (req, res) => {
         const files = await fs.readdir(DOWNLOADS_DIR);
         const fileDetails = await Promise.all(
             files.map(async (file) => {
-                const filePath = path.join(DOWNLOADS_DIR, file);
-                const stats = await fs.stat(filePath);
-                return {
-                    name: file,
-                    size: stats.size,
-                    created: stats.birthtime,
-                    downloadUrl: `/downloads/${encodeURIComponent(file)}`
-                };
+                try {
+                    const filePath = path.join(DOWNLOADS_DIR, file);
+                    const stats = await fs.stat(filePath);
+                    return {
+                        name: file,
+                        size: stats.size,
+                        created: stats.birthtime,
+                        downloadUrl: `/downloads/${encodeURIComponent(file)}`
+                    };
+                } catch (error) {
+                    return null;
+                }
             })
         );
         
-        res.json(fileDetails.sort((a, b) => b.created - a.created));
+        const validFiles = fileDetails.filter(f => f !== null);
+        res.json(validFiles.sort((a, b) => b.created - a.created));
     } catch (error) {
+        console.error('Error listando archivos:', error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -300,6 +414,7 @@ app.get('/api/download-file/:filename', (req, res) => {
     
     res.download(filePath, (err) => {
         if (err) {
+            console.error('Error descargando archivo:', err.message);
             res.status(404).json({ error: 'Archivo no encontrado' });
         }
     });
@@ -313,6 +428,7 @@ app.delete('/api/file/:filename', async (req, res) => {
         await fs.unlink(filePath);
         res.json({ success: true });
     } catch (error) {
+        console.error('Error eliminando archivo:', error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -373,27 +489,46 @@ async function processQueue() {
 }
 
 // Servir frontend estático
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Ruta catch-all para SPA
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+if (NODE_ENV === 'production') {
+    app.use(express.static(path.join(__dirname, 'public')));
+    
+    // Ruta catch-all para SPA
+    app.get('*', (req, res) => {
+        res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    });
+}
 
 // Iniciar servidor
 async function startServer() {
-    await ensureDownloadsDir();
-    
-    const ytDlpAvailable = await checkYtDlp();
-    if (!ytDlpAvailable) {
-        console.warn('⚠️  yt-dlp no está disponible. Instálalo para funcionalidad completa.');
+    try {
+        await ensureDownloadsDir();
+        
+        let ytDlpAvailable = await checkYtDlp();
+        
+        // Intentar instalar yt-dlp si no está disponible
+        if (!ytDlpAvailable && NODE_ENV === 'production') {
+            ytDlpAvailable = await installYtDlp();
+        }
+        
+        if (!ytDlpAvailable) {
+            console.warn('⚠️  yt-dlp no está disponible. Instálalo para funcionalidad completa.');
+        }
+        
+        // Limpiar archivos antiguos cada 30 minutos
+        setInterval(cleanupOldFiles, 30 * 60 * 1000);
+        
+        server.listen(PORT, '0.0.0.0', () => {
+            console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
+            console.log(`🌍 Entorno: ${NODE_ENV}`);
+            console.log(`🚂 Railway: ${RAILWAY_ENVIRONMENT}`);
+            console.log(`📁 Directorio de descargas: ${DOWNLOADS_DIR}`);
+            console.log(`🎵 yt-dlp disponible: ${ytDlpAvailable ? '✅' : '❌'}`);
+        });
+        
+    } catch (error) {
+        console.error('❌ Error iniciando servidor:', error);
+        process.exit(1);
     }
-    
-    server.listen(PORT, () => {
-        console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
-        console.log(`📁 Directorio de descargas: ${DOWNLOADS_DIR}`);
-        console.log(`🎵 yt-dlp disponible: ${ytDlpAvailable ? '✅' : '❌'}`);
-    });
 }
 
 // Manejo de errores no capturados
@@ -406,21 +541,37 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Limpieza al cerrar
+process.on('SIGTERM', () => {
+    console.log('\n🛑 Cerrando servidor (SIGTERM)...');
+    gracefulShutdown();
+});
+
 process.on('SIGINT', () => {
-    console.log('\n🛑 Cerrando servidor...');
-    
+    console.log('\n🛑 Cerrando servidor (SIGINT)...');
+    gracefulShutdown();
+});
+
+function gracefulShutdown() {
     // Cancelar descargas activas
     activeDownloads.forEach((process, id) => {
         console.log(`Cancelando descarga ${id}`);
-        process.kill('SIGTERM');
+        try {
+            process.kill('SIGTERM');
+        } catch (error) {
+            console.error(`Error cancelando descarga ${id}:`, error.message);
+        }
     });
     
     server.close(() => {
         console.log('✅ Servidor cerrado correctamente');
         process.exit(0);
     });
-});
+    
+    // Forzar cierre después de 10 segundos
+    setTimeout(() => {
+        console.log('🔴 Forzando cierre del servidor');
+        process.exit(1);
+    }, 10000);
+}
 
 startServer().catch(console.error);
-// Servir el frontend desde la carpeta public
-app.use(express.static(path.join(__dirname, 'public')));
