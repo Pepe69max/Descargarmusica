@@ -13,21 +13,39 @@ RUN apt-get update && apt-get install -y \
     curl \
     wget \
     build-essential \
+    pipx \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Crear entorno virtual de Python para evitar conflictos
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Usar imagen oficial de Node.js con soporte completo para Python
+FROM node:18-bullseye-slim
 
-# Actualizar pip dentro del entorno virtual
-RUN pip install --upgrade pip setuptools wheel
+# Instalar dependencias del sistema necesarias para yt-dlp
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    python3-setuptools \
+    python3-wheel \
+    ffmpeg \
+    curl \
+    wget \
+    build-essential \
+    pipx \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Instalar yt-dlp en el entorno virtual
-RUN pip install yt-dlp
+# Copiar script de instalación
+COPY install-ytdlp.sh /tmp/install-ytdlp.sh
+RUN chmod +x /tmp/install-ytdlp.sh
 
-# Verificar que yt-dlp funciona correctamente
-RUN yt-dlp --version
+# Ejecutar script de instalación
+RUN /tmp/install-ytdlp.sh
+
+# Asegurar que el PATH incluya todas las ubicaciones posibles
+ENV PATH="/opt/venv/bin:/root/.local/bin:/usr/local/bin:$PATH"
+ENV PYTHONPATH="/opt/venv/lib/python3.9/site-packages"
 
 # Crear usuario no-root
 RUN useradd -m -s /bin/bash appuser
