@@ -117,22 +117,61 @@ function broadcastUpdate(type, data) {
 // Verificar si yt-dlp está instalado
 async function checkYtDlp() {
     try {
-        const { stdout } = await execAsync('yt-dlp --version');
-        console.log(`✅ yt-dlp version: ${stdout.trim()}`);
+        const { stdout } = await execAsync('which yt-dlp');
+        console.log(`✅ yt-dlp encontrado en: ${stdout.trim()}`);
+        
+        const { stdout: version } = await execAsync('yt-dlp --version');
+        console.log(`✅ yt-dlp version: ${version.trim()}`);
         return true;
     } catch (error) {
-        console.error('❌ yt-dlp no está instalado o no está en el PATH');
-        return false;
+        console.error('❌ yt-dlp no encontrado:', error.message);
+        
+        // Intentar con python3 -m yt_dlp
+        try {
+            const { stdout } = await execAsync('python3 -m yt_dlp --version');
+            console.log(`✅ yt-dlp via python3: ${stdout.trim()}`);
+            return 'python3';
+        } catch (pythonError) {
+            console.error('❌ yt-dlp tampoco disponible via python3');
+            return false;
+        }
     }
 }
 
-// Instalar yt-dlp si no está disponible (para Railway)
+// Instalar yt-dlp si no está disponible (para Railway/Render)
 async function installYtDlp() {
     try {
         console.log('📦 Instalando yt-dlp...');
-        await execAsync('pip install yt-dlp');
-        console.log('✅ yt-dlp instalado correctamente');
-        return true;
+        
+        // Intentar con pip3
+        try {
+            await execAsync('pip3 install --upgrade yt-dlp');
+            console.log('✅ yt-dlp instalado con pip3');
+            return true;
+        } catch (pipError) {
+            console.log('⚠️ pip3 falló, intentando con python3 -m pip');
+        }
+        
+        // Intentar con python3 -m pip
+        try {
+            await execAsync('python3 -m pip install --upgrade yt-dlp');
+            console.log('✅ yt-dlp instalado con python3 -m pip');
+            return true;
+        } catch (pythonError) {
+            console.log('⚠️ python3 -m pip falló, intentando con apt');
+        }
+        
+        // Último intento con apt (Ubuntu/Debian)
+        try {
+            await execAsync('apt-get update && apt-get install -y python3-pip');
+            await execAsync('pip3 install --upgrade yt-dlp');
+            console.log('✅ yt-dlp instalado después de actualizar pip');
+            return true;
+        } catch (aptError) {
+            console.error('❌ No se pudo instalar yt-dlp:', aptError.message);
+            return false;
+        }
+        
     } catch (error) {
         console.error('❌ Error instalando yt-dlp:', error.message);
         return false;
@@ -142,11 +181,22 @@ async function installYtDlp() {
 // Obtener información del video con timeout
 async function getVideoInfo(url) {
     try {
-        const command = `timeout 30 yt-dlp --dump-json --no-playlist "${url}"`;
+        // Determinar comando según disponibilidad
+        const ytdlpAvailable = await checkYtDlp();
+        let command;
+        
+        if (ytdlpAvailable === 'python3') {
+            command = `timeout 30 python3 -m yt_dlp --dump-json --no-playlist "${url}"`;
+        } else if (ytdlpAvailable === true) {
+            command = `timeout 30 yt-dlp --dump-json --no-playlist "${url}"`;
+        } else {
+            throw new Error('yt-dlp no está disponible en el servidor');
+        }
+        
         const { stdout } = await execAsync(command);
         const info = JSON.parse(stdout);
         
-        // Validar duración para Railway
+        // Validar duración para Railway/Render
         if (info.duration && info.duration > MAX_DURATION) {
             throw new Error(`Video demasiado largo. Máximo ${MAX_DURATION/60} minutos permitidos.`);
         }
@@ -172,18 +222,31 @@ function formatDuration(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// Descargar video/audio con límites para Railway
+// Descargar video/audio con límites para Railway/Render
 async function downloadMedia(url, options, downloadId) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         const { quality, format, isPlaylist } = options;
         
-        // Construir comando yt-dlp con límites para Railway
+        // Determinar comando según disponibilidad
+        const ytdlpAvailable = await checkYtDlp();
+        let baseCommand;
+        
+        if (ytdlpAvailable === 'python3') {
+            baseCommand = 'python3 -m yt_dlp';
+        } else if (ytdlpAvailable === true) {
+            baseCommand = 'yt-dlp';
+        } else {
+            return reject(new Error('yt-dlp no está disponible en el servidor'));
+        }
+        
+        // Construir comando completo
         let command = [
-            'yt-dlp',
+            baseCommand.split(' ')[0],
+            ...(baseCommand.includes(' ') ? baseCommand.split(' ').slice(1) : []),
             '--extract-audio',
             `--audio-format=${format}`,
             `--audio-quality=${quality}`,
-            '--output', path.join(DOWNLOADS_DIR, '%(title).100s.%(ext)s'), // Limitar nombre
+            '--output', path.join(DOWNLOADS_DIR, '%(title).100s.%(ext)s'),
             '--no-mtime',
             '--embed-thumbnail',
             '--embed-metadata',
@@ -193,7 +256,7 @@ async function downloadMedia(url, options, downloadId) {
         ];
 
         if (isPlaylist) {
-            command.push('--yes-playlist', '--max-downloads=5'); // Limitar playlist
+            command.push('--yes-playlist', '--max-downloads=5');
         } else {
             command.push('--no-playlist');
         }
