@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <title>🎵 Descargador de Música MP3</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            /* Modo claro */
+            --bg-main: #f5f5f5;
+            --bg-secondary: #ffffff;
+            --bg-widget: #ffffff;
+            --bg-frame: #f8f9fa;
+            --fg-primary: #333333;
+            --fg-secondary: #666666;
+            --accent-color: #0d6efd;
+            --border-color: #dee2e6;
+            --success-color: #198754;
+            --error-color: #dc3545;
+            --warning-color: #fd7e14;
+        }
+
+        [data-theme="dark"] {
+            /* Modo oscuro */
+            --bg-main: #1a1a1a;
+            --bg-secondary: #252525;
+            --bg-widget: #2f2f2f;
+            --bg-frame: #202020;
+            --fg-primary: #ffffff;
+            --fg-secondary: #cccccc;
+            --accent-color: #0d7377;
+            --border-color: #404040;
+            --success-color: #198754;
+            --error-color: #dc3545;
+            --warning-color: #fd7e14;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg-main);
+            color: var(--fg-primary);
+            line-height: 1.6;
+            transition: all 0.3s ease;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.2rem;
+            color: var(--accent-color);
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .connection-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+
+        .connection-status.connected {
+            background: rgba(25, 135, 84, 0.1);
+            color: var(--success-color);
+        }
+
+        .connection-status.disconnected {
+            background: rgba(220, 53, 69, 0.1);
+            color: var(--error-color);
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--fg-secondary);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        input[type="text"], input[type="url"], select {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-widget);
+            color: var(--fg-primary);
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.1);
+        }
+
+        [data-theme="dark"] input:focus, [data-theme="dark"] select:focus {
+            box-shadow: 0 0 0 3px rgba(13, 115, 119, 0.2);
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: var(--accent-color);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #0b5ed7;
+            transform: translateY(-1px);
+        }
+
+        [data-theme="dark"] .btn-primary:hover:not(:disabled) {
+            background: #0a5d61;
+        }
+
+        .btn-secondary {
+            background: var(--bg-widget);
+            color: var(--fg-primary);
+            border: 2px solid var(--border-color);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--bg-frame);
+        }
+
+        .btn-danger {
+            background: var(--error-color);
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #bb2d3b;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 16px 0;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent-color);
+        }
+
+        .info-panel {
+            background: var(--bg-frame);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            margin: 16px 0;
+            min-height: 100px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 14px;
+            white-space: pre-wrap;
+        }
+
+        .queue-list {
+            background: var(--bg-widget);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-height: 150px;
+            overflow-y: auto;
+            margin: 16px 0;
+        }
+
+        .queue-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .queue-item:hover {
+            background: var(--bg-frame);
+        }
+
+        .queue-item:last-child {
+            border-bottom: none;
+        }
+
+        .queue-item.selected {
+            background: var(--accent-color);
+            color: white;
+        }
+
+        .queue-item.downloading {
+            background: rgba(253, 126, 20, 0.1);
+            border-left: 4px solid var(--warning-color);
+        }
+
+        .queue-item.completed {
+            background: rgba(25, 135, 84, 0.1);
+            border-left: 4px solid var(--success-color);
+        }
+
+        .queue-item.failed {
+            background: rgba(220, 53, 69, 0.1);
+            border-left: 4px solid var(--error-color);
+        }
+
+        .progress-container {
+            margin: 20px 0;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--bg-frame);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-color);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
+        .progress-text {
+            text-align: center;
+            font-size: 14px;
+            color: var(--fg-secondary);
+        }
+
+        .log-panel {
+            background: var(--bg-widget);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            height: 250px;
+            overflow-y: auto;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+            word-break: break-all;
+        }
+
+        .log-entry.success { color: var(--success-color); }
+        .log-entry.error { color: var(--error-color); }
+        .log-entry.warning { color: var(--warning-color); }
+
+        .theme-toggle {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            font-size: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .theme-toggle:hover {
+            transform: scale(1.1);
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin: 20px 0;
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            align-items: end;
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin: 16px 0;
+            font-weight: 500;
+        }
+
+        .alert.success {
+            background: rgba(25, 135, 84, 0.1);
+            color: var(--success-color);
+            border: 1px solid rgba(25, 135, 84, 0.2);
+        }
+
+        .alert.error {
+            background: rgba(220, 53, 69, 0.1);
+            color: var(--error-color);
+            border: 1px solid rgba(220, 53, 69, 0.2);
+        }
+
+        .alert.warning {
+            background: rgba(253, 126, 20, 0.1);
+            color: var(--warning-color);
+            border: 1px solid rgba(253, 126, 20, 0.2);
+        }
+
+        .downloads-list {
+            background: var(--bg-widget);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin: 16px 0;
+        }
+
+        .download-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .download-item:last-child {
+            border-bottom: none;
+        }
+
+        .download-info {
+            flex: 1;
+        }
+
+        .download-name {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .download-meta {
+            font-size: 12px;
+            color: var(--fg-secondary);
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+            
+            .config-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .input-group {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <button class="theme-toggle" onclick="toggleTheme()" title="Cambiar tema">🌙</button>
+    
+    <div class="container">
+        <div class="header">
+            <h1>🎵 Descargador de Música MP3</h1>
+            <p>
+                Descarga música de alta calidad desde YouTube y otras plataformas
+                <span class="connection-status" id="connectionStatus">
+                    <span id="statusIndicator">⚪</span>
+                    <span id="statusText">Conectando...</span>
+                </span>
+            </p>
+        </div>
+
+        <!-- Entrada de URL -->
+        <div class="card">
+            <div class="form-group">
+                <label for="urlInput">URL del video/playlist:</label>
+                <div class="input-group">
+                    <input type="url" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." />
+                    <button class="btn-primary" onclick="addToQueue()">➕ Agregar a Cola</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Información del video -->
+        <div class="card">
+            <h3>📋 Información del Video</h3>
+            <div class="info-panel" id="videoInfo">
+                Selecciona una URL y haz clic en "Obtener Info" para ver los detalles...
+            </div>
+            <button class="btn-secondary" onclick="getVideoInfo()">ℹ️ Obtener Info</button>
+        </div>
+
+        <!-- Configuración -->
+        <div class="card">
+            <h3>⚙️ Configuración</h3>
+            <div class="config-grid">
+                <div class="form-group">
+                    <label for="qualitySelect">Calidad de audio:</label>
+                    <select id="qualitySelect">
+                        <option value="320">320 kbps (Mejor)</option>
+                        <option value="192">192 kbps (Buena)</option>
+                        <option value="128">128 kbps (Normal)</option>
+                        <option value="64">64 kbps (Básica)</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="formatSelect">Formato:</label>
+                    <select id="formatSelect">
+                        <option value="mp3">MP3</option>
+                        <option value="m4a">M4A</option>
+                        <option value="wav">WAV</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="checkbox-group">
+                <input type="checkbox" id="playlistCheck" />
+                <label for="playlistCheck">Descargar playlist completa</label>
+            </div>
+        </div>
+
+        <!-- Cola de descargas -->
+        <div class="card">
+            <h3>📝 Cola de Descargas (<span id="queueCount">0</span>)</h3>
+            <div class="queue-list" id="queueList">
+                <div style="padding: 20px; text-align: center; color: var(--fg-secondary);">
+                    No hay elementos en la cola
+                </div>
+            </div>
+            <div class="button-group">
+                <button class="btn-secondary" onclick="clearQueue()">🗑️ Limpiar Cola</button>
+                <button class="btn-danger" onclick="removeSelected()">❌ Eliminar Seleccionado</button>
+            </div>
+        </div>
+
+        <!-- Botones principales -->
+        <div class="card">
+            <div class="button-group">
+                <button class="btn-primary" id="downloadBtn" onclick="startDownloads()">
+                    🔽 Iniciar Descargas
+                </button>
+                <button class="btn-danger" id="cancelBtn" onclick="cancelDownload()" disabled>
+                    ⏹️ Cancelar
+                </button>
+            </div>
+        </div>
+
+        <!-- Progreso -->
+        <div class="card">
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-text" id="progressText">Listo para descargar</div>
+            </div>
+        </div>
+
+        <!-- Archivos descargados -->
+        <div class="card">
+            <h3>📁 Archivos Descargados</h3>
+            <div class="downloads-list" id="downloadsList">
+                <div style="padding: 20px; text-align: center; color: var(--fg-secondary);">
+                    No hay archivos descargados
+                </div>
+            </div>
+            <button class="btn-secondary" onclick="refreshDownloads()" style="margin-top: 10px;">
+                🔄 Actualizar Lista
+            </button>
+        </div>
+
+        <!-- Log -->
+        <div class="card">
+            <h3>📜 Log de Descarga</h3>
+            <div class="log-panel" id="logPanel"></div>
+            <button class="btn-secondary" onclick="clearLog()" style="margin-top: 10px;">
+                🧹 Limpiar Log
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Configuración de la API
+        const API_BASE = window.location.origin; // Ajustar puerto si es necesario
+        
+        // Estado de la aplicación
+        let downloadQueue = [];
+        let selectedQueueIndex = -1;
+        let isDownloading = false;
+        let ws = null;
+        let isConnected = false;
+
+        // Inicialización
+        document.addEventListener('DOMContentLoaded', function() {
+            // Cargar tema guardado
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            if (savedTheme === 'dark') {
+                document.body.setAttribute('data-theme', 'dark');
+                document.querySelector('.theme-toggle').textContent = '☀️';
+            }
+
+            // Eventos de teclado
+            document.getElementById('urlInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    addToQueue();
+                }
+            });
+
+            // Inicializar conexión
+            initializeConnection();
+            
+            logMessage('✅ Aplicación iniciada correctamente');
+        });
+
+        // Conexión WebSocket y API
+        function initializeConnection() {
+            // Verificar estado del servidor
+            checkServerStatus();
+            
+            // Conectar WebSocket
+            connectWebSocket();
+            
+            // Cargar datos iniciales
+            loadQueue();
+            refreshDownloads();
+        }
+
+        async function checkServerStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/api/status`);
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    updateConnectionStatus(true);
+                    if (!data.ytDlpAvailable) {
+                        showAlert('yt-dlp no está disponible en el servidor. Algunas funciones pueden no funcionar.', 'warning');
+                    }
+                } else {
+                    updateConnectionStatus(false);
+                }
+            } catch (error) {
+                updateConnectionStatus(false);
+                logMessage(`❌ Error conectando al servidor: ${error.message}`);
+            }
+        }
+
+        function connectWebSocket() {
+            const wsUrl = API_BASE.replace('http', 'ws');
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                logMessage('🔗 Conectado al servidor via WebSocket');
+                updateConnectionStatus(true);
+            };
+            
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                handleWebSocketMessage(message);
+            };
+            
+            ws.onclose = () => {
+                logMessage('🔌 Conexión WebSocket cerrada');
+                updateConnectionStatus(false);
+                
+                // Intentar reconectar después de 5 segundos
+                setTimeout(connectWebSocket, 5000);
+            };
+            
+            ws.onerror = (error) => {
+                logMessage(`❌ Error WebSocket: ${error.message}`);
+                updateConnectionStatus(false);
+            };
+        }
+
+        function handleWebSocketMessage(message) {
+            const { type, data } = message;
+            
+            switch (type) {
+                case 'progress':
+                    updateProgress(data.progress, `Descargando - ${data.progress.toFixed(1)}%`);
+                    updateQueueItemStatus(data.downloadId, 'downloading');
+                    break;
+                    
+                case 'started':
+                    logMessage(`🔽 Iniciando descarga: ${data.downloadId}`);
+                    updateQueueItemStatus(data.downloadId, 'downloading');
+                    break;
+                    
+                case 'completed':
+                    logMessage(`✅ Descarga completada: ${data.downloadId}`);
+                    updateQueueItemStatus(data.downloadId, 'completed');
+                    refreshDownloads();
+                    break;
+                    
+                case 'failed':
+                    logMessage(`❌ Descarga fallida: ${data.downloadId} - ${data.error}`);
+                    updateQueueItemStatus(data.downloadId, 'failed');
+                    showAlert(`Error en descarga: ${data.error}`, 'error');
+                    break;
+                    
+                case 'cancelled':
+                    logMessage(`⏹️ Descarga cancelada: ${data.downloadId}`);
+                    updateQueueItemStatus(data.downloadId, 'cancelled');
+                    break;
+            }
+        }
+
+        function updateConnectionStatus(connected) {
+            isConnected = connected;
+            const statusEl = document.getElementById('connectionStatus');
+            const indicatorEl = document.getElementById('statusIndicator');
+            const textEl = document.getElementById('statusText');
+            
+            if (connected) {
+                statusEl.className = 'connection-status connected';
+                indicatorEl.textContent = '🟢';
+                textEl.textContent = 'Conectado';
+            } else {
+                statusEl.className = 'connection-status disconnected';
+                indicatorEl.textContent = '🔴';
+                textEl.textContent = 'Desconectado';
+            }
+        }
+
+        // Funciones de API
+        async function apiRequest(endpoint, options = {}) {
+            try {
+                const response = await fetch(`${API_BASE}/api${endpoint}`, {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...options.headers
+                    },
+                    ...options
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                return await response.json();
+            } catch (error) {
+                logMessage(`❌ Error API: ${error.message}`);
+                throw error;
+            }
+        }
+
+        // Funciones de tema
+        function toggleTheme() {
+            const body = document.body;
+            const themeToggle = document.querySelector('.theme-toggle');
+            
+            if (body.getAttribute('data-theme') === 'dark') {
+                body.removeAttribute('data-theme');
+                themeToggle.textContent = '🌙';
+                localStorage.setItem('theme', 'light');
+            } else {
+                body.setAttribute('data-theme', 'dark');
+                themeToggle.textContent = '☀️';
+                localStorage.setItem('theme', 'dark');
+            }
+        }
+
+        // Funciones de cola
+        async function addToQueue() {
+            const urlInput = document.getElementById('urlInput');
+            const url = urlInput.value.trim();
+            
+            if (!url) {
+                showAlert('Por favor ingresa una URL válida.', 'warning');
+                return;
+            }
+
+            if (!isValidUrl(url)) {
+                showAlert('La URL no es válida. Asegúrate de incluir http:// o https://', 'error');
+                return;
+            }
+
+            if (!isConnected) {
+                showAlert('No hay conexión con el servidor.', 'error');
+                return;
+            }
+
+            try {
+                const quality = document.getElementById('qualitySelect').value;
+                const format = document.getElementById('formatSelect').value;
+                const isPlaylist = document.getElementById('playlistCheck').checked;
+
+                const result = await apiRequest('/download', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        url,
+                        quality,
+                        format,
+                        isPlaylist
+                    })
+                });
+
+                urlInput.value = '';
+                logMessage(`✅ URL agregada a la cola: ${url}`);
+                loadQueue();
+                
+            } catch (error) {
+                showAlert(`Error agregando a la cola: ${error.message}`, 'error');
+            }
+        }
+
+        async function clearQueue() {
+            if (!isConnected) {
+                showAlert('No hay conexión con el servidor.', 'error');
+                return;
+            }
+
+            try {
+                await apiRequest('/queue', { method: 'DELETE' });
+                selectedQueueIndex = -1;
+                loadQueue();
+                logMessage('🗑️ Cola de descargas limpiada');
+            } catch (error) {
+                showAlert(`Error limpiando la cola: ${error.message}`, 'error');
+            }
+        }
+
+        async function removeSelected() {
+            if (selectedQueueIndex === -1) {
+                showAlert('Selecciona un elemento de la cola para eliminar.', 'warning');
+                return;
+            }
+
+            if (!isConnected) {
+                showAlert('No hay conexión con el servidor.', 'error');
+                return;
+            }
+
+            try {
+                const item = downloadQueue[selectedQueueIndex];
+                await apiRequest(`/download/${item.id}`, { method: 'DELETE' });
+                
+                selectedQueueIndex = -1;
+                loadQueue();
+                logMessage(`🗑️ Elemento eliminado de la cola: ${item.url}`);
+            } catch (error) {
+                showAlert(`Error eliminando elemento: ${error.message}`, 'error');
+            }
+        }
+
+        async function loadQueue() {
+            if (!isConnected) return;
+
+            try {
+                const data = await apiRequest('/queue');
+                downloadQueue = data.queue;
+                updateQueueDisplay();
+            } catch (error) {
+                logMessage(`❌ Error cargando cola: ${error.message}`);
+            }
+        }
+
+        function updateQueueDisplay() {
+            const queueList = document.getElementById('queueList');
+            const queueCount = document.getElementById('queueCount');
+            
+            queueCount.textContent = downloadQueue.length;
+            
+            if (downloadQueue.length === 0) {
+                queueList.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--fg-secondary);">No hay elementos en la cola</div>';
+                return;
+            }
+
+            queueList.innerHTML = downloadQueue.map((item, index) => {
+                const statusClass = item.status || 'queued';
+                const statusIcon = getStatusIcon(item.status);
+                
+                return `<div class="queue-item ${statusClass} ${index === selectedQueueIndex ? 'selected' : ''}" 
+                          onclick="selectQueueItem(${index})">
+                    ${statusIcon} ${index + 1}. ${item.url}
+                    <br><small>${item.quality}kbps ${item.format.toUpperCase()} ${item.isPlaylist ? '(Playlist)' : ''}</small>
+                 </div>`;
+            }).join('');
+        }
+
+        function getStatusIcon(status) {
+            switch (status) {
+                case 'queued': return '⏳';
+                case 'downloading': return '⬇️';
+                case 'completed': return '✅';
+                case 'failed': return '❌';
+                case 'cancelled': return '⏹️';
+                default: return '⏳';
+            }
+        }
+
+        function updateQueueItemStatus(downloadId, status) {
+            const item = downloadQueue.find(item => item.id === downloadId);
+            if (item) {
+                item.status = status;
+                updateQueueDisplay();
+            }
+        }
+
+        function selectQueueItem(index) {
+            selectedQueueIndex = selectedQueueIndex === index ? -1 : index;
+            updateQueueDisplay();
+        }
+
+        // Funciones de descarga
+        async function getVideoInfo() {
+            const url = document.getElementById('urlInput').value.trim();
+            if (!url) {
+                showAlert('Por favor ingresa una URL válida.', 'warning');
+                return;
+            }
+
+            if (!isConnected) {
+                showAlert('No hay conexión con el servidor.', 'error');
+                return;
+            }
+
+            const infoPanel = document.getElementById('videoInfo');
+            infoPanel.textContent = 'Obteniendo información...';
+
+            try {
+                const info = await apiRequest('/video-info', {
+                    method: 'POST',
+                    body: JSON.stringify({ url })
+                });
+
+                infoPanel.innerHTML = `
+📹 ${info.title}
+👤 ${info.uploader} | ⏱️ ${info.duration}
+👁️ ${info.view_count ? info.view_count.toLocaleString() : 'N/A'} visualizaciones
+                `.trim();
+
+                logMessage(`ℹ️ Información obtenida para: ${url}`);
+            } catch (error) {
+                infoPanel.textContent = `❌ Error al obtener información: ${error.message}`;
+            }
+        }
+
+        async function startDownloads() {
+            if (!isConnected) {
+                showAlert('No hay conexión con el servidor.', 'error');
+                return;
+            }
+
+            if (downloadQueue.length === 0) {
+                showAlert('No hay URLs en la cola para descargar.', 'warning');
+                return;
+            }
+
+            // Las descargas se procesan automáticamente en el servidor
+            showAlert('Las descargas se están procesando en el servidor...', 'success');
+            logMessage('🔽 Descargas iniciadas en el servidor');
+        }
+
+        async function cancelDownload() {
+            if (!isConnected) {
+                showAlert('No hay conexión con el servidor.', 'error');
+                return;
+            }
+
+            // Cancelar todas las descargas activas
+            try {
+                const data = await apiRequest('/queue');
+                const activeDownloads = data.active;
+                
+                for (const downloadId of activeDownloads) {
+                    await apiRequest(`/download/${downloadId}`, { method: 'DELETE' });
+                }
+                
+                logMessage('❌ Descargas canceladas');
+                loadQueue();
+            } catch (error) {
+                showAlert(`Error cancelando descargas: ${error.message}`, 'error');
+            }
+        }
+
+        // Funciones de archivos descargados
+        async function refreshDownloads() {
+            if (!isConnected) return;
+
+            try {
+                const files = await apiRequest('/downloads');
+                updateDownloadsList(files);
+            } catch (error) {
+                logMessage(`❌ Error cargando archivos: ${error.message}`);
+            }
+        }
+
+        function updateDownloadsList(files) {
+            const downloadsList = document.getElementById('downloadsList');
+            
+            if (files.length === 0) {
+                downloadsList.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--fg-secondary);">No hay archivos descargados</div>';
+                return;
+            }
+
+            downloadsList.innerHTML = files.map(file => `
+                <div class="download-item">
+                    <div class="download-info">
+                        <div class="download-name">${file.name}</div>
+                        <div class="download-meta">
+                            ${formatFileSize(file.size)} • ${new Date(file.created).toLocaleString()}
+                        </div>
+                    </div>
+                    <div class="download-actions">
+                        <button class="btn-secondary" onclick="downloadFile('${file.name}')" style="padding: 6px 12px; font-size: 12px;">
+                            ⬇️ Descargar
+                        </button>
+                        <button class="btn-danger" onclick="deleteFile('${file.name}')" style="padding: 6px 12px; font-size: 12px; margin-left: 8px;">
+                            🗑️
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function downloadFile(filename) {
+            const link = document.createElement('a');
+            link.href = `${API_BASE}/api/download-file/${encodeURIComponent(filename)}`;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        async function deleteFile(filename) {
+            if (!confirm(`¿Estás seguro de que quieres eliminar "${filename}"?`)) {
+                return;
+            }
+
+            try {
+                await apiRequest(`/file/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+                refreshDownloads();
+                logMessage(`🗑️ Archivo eliminado: ${filename}`);
+            } catch (error) {
+                showAlert(`Error eliminando archivo: ${error.message}`, 'error');
+            }
+        }
+
+        // Funciones de utilidad
+        function updateProgress(percent, text) {
+            document.getElementById('progressFill').style.width = `${percent}%`;
+            document.getElementById('progressText').textContent = text;
+        }
+
+        function logMessage(message) {
+            const logPanel = document.getElementById('logPanel');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            
+            // Determinar tipo de mensaje
+            if (message.includes('✅')) logEntry.classList.add('success');
+            else if (message.includes('❌')) logEntry.classList.add('error');
+            else if (message.includes('⚠️')) logEntry.classList.add('warning');
+            
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            logPanel.appendChild(logEntry);
+            logPanel.scrollTop = logPanel.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('logPanel').innerHTML = '';
+        }
+
+        function showAlert(message, type = 'info') {
+            const alert = document.createElement('div');
+            alert.className = `alert ${type}`;
+            alert.textContent = message;
+            alert.style.position = 'fixed';
+            alert.style.top = '80px';
+            alert.style.right = '20px';
+            alert.style.zIndex = '1001';
+            alert.style.maxWidth = '400px';
+            
+            document.body.appendChild(alert);
+            
+            setTimeout(() => {
+                alert.remove();
+            }, 5000);
+        }
+
+        function isValidUrl(string) {
+            try {
+                new URL(string);
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Atajos de teclado
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey || e.metaKey) {
+                switch(e.key) {
+                    case 'Enter':
+                        e.preventDefault();
+                        if (isConnected && downloadQueue.length > 0) {
+                            startDownloads();
+                        }
+                        break;
+                    case 'Escape':
+                        if (isConnected) {
+                            cancelDownload();
+                        }
+                        break;
+                }
+            }
+        });
+
+        // Actualización periódica
+        setInterval(() => {
+            if (isConnected) {
+                loadQueue();
+            } else {
+                checkServerStatus();
+            }
+        }, 10000); // Cada 10 segundos
+    </script>
+</body>
+</html>
