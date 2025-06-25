@@ -111,6 +111,7 @@ async function downloadMedia(url, options, downloadId) {
             `--audio-quality=${quality}`,
             '--output', path.join(DOWNLOADS_DIR, '%(title)s.%(ext)s'),
             '--no-mtime',
+            '--embed-thumbnail',
             '--embed-metadata',
             '--add-metadata'
         ];
