@@ -338,7 +338,8 @@ async function downloadMedia(url, options, downloadId) {
 
             console.log(`Ejecutando descarga: ${command.join(' ')}`);
             
-            const process = spawn(command[0], command.slice(1), {
+            // Cambiar el nombre de la variable de 'process' a 'childProcess'
+            const childProcess = spawn(command[0], command.slice(1), {
                 timeout: 600000, // 10 minutos timeout
                 env: { ...process.env, PYTHONPATH: '/opt/venv/lib/python3.9/site-packages' }
             });
@@ -346,7 +347,7 @@ async function downloadMedia(url, options, downloadId) {
             let output = '';
             let errorOutput = '';
 
-            process.stdout.on('data', (data) => {
+            childProcess.stdout.on('data', (data) => {
                 const text = data.toString();
                 output += text;
                 console.log('STDOUT:', text);
@@ -363,13 +364,13 @@ async function downloadMedia(url, options, downloadId) {
                 }
             });
 
-            process.stderr.on('data', (data) => {
+            childProcess.stderr.on('data', (data) => {
                 const text = data.toString();
                 errorOutput += text;
                 console.error('STDERR:', text);
             });
 
-            process.on('close', (code) => {
+            childProcess.on('close', (code) => {
                 console.log(`Proceso terminado con código: ${code}`);
                 if (code === 0) {
                     broadcastUpdate('progress', {
@@ -383,13 +384,13 @@ async function downloadMedia(url, options, downloadId) {
                 }
             });
 
-            process.on('error', (error) => {
+            childProcess.on('error', (error) => {
                 console.error('Error del proceso:', error);
                 reject(new Error(`Error ejecutando yt-dlp: ${error.message}`));
             });
 
-            // Guardar referencia del proceso
-            activeDownloads.set(downloadId, process);
+            // Guardar referencia del proceso con el nuevo nombre
+            activeDownloads.set(downloadId, childProcess);
             
         } catch (error) {
             reject(new Error(`Error configurando descarga: ${error.message}`));
@@ -568,18 +569,54 @@ app.get('/api/download-file/:filename', (req, res) => {
     });
 });
 
-// Eliminar archivo descargado
-app.delete('/api/file/:filename', async (req, res) => {
+
+// Cancelar descarga - Ruta API
+app.delete('/api/download/:downloadId', (req, res) => {
+    const { downloadId } = req.params;
+    
     try {
-        const filename = req.params.filename;
-        const filePath = path.join(DOWNLOADS_DIR, filename);
-        await fs.unlink(filePath);
+        // Cancelar descarga activa
+        if (activeDownloads.has(downloadId)) {
+            const childProcess = activeDownloads.get(downloadId);
+            childProcess.kill('SIGTERM');
+            activeDownloads.delete(downloadId);
+            
+            broadcastUpdate('cancelled', { downloadId });
+        }
+        
+        // Remover de la cola
+        downloadQueue = downloadQueue.filter(item => item.id !== downloadId);
+        
         res.json({ success: true });
     } catch (error) {
-        console.error('Error eliminando archivo:', error.message);
+        console.error('Error cancelando descarga:', error.message);
         res.status(500).json({ error: error.message });
     }
 });
+
+// Función de cierre graceful actualizada
+function gracefulShutdown() {
+    // Cancelar descargas activas
+    activeDownloads.forEach((childProcess, id) => {
+        console.log(`Cancelando descarga ${id}`);
+        try {
+            childProcess.kill('SIGTERM');
+        } catch (error) {
+            console.error(`Error cancelando descarga ${id}:`, error.message);
+        }
+    });
+    
+    server.close(() => {
+        console.log('✅ Servidor cerrado correctamente');
+        process.exit(0);
+    });
+    
+    // Forzar cierre después de 10 segundos
+    setTimeout(() => {
+        console.log('🔴 Forzando cierre del servidor');
+        process.exit(1);
+    }, 10000);
+}
 
 // Procesar cola de descargas
 async function processQueue() {
