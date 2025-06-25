@@ -23,9 +23,17 @@ const DOWNLOADS_DIR = NODE_ENV === 'production'
     ? '/tmp/downloads' 
     : path.join(__dirname, 'downloads');
 
-const MAX_CONCURRENT_DOWNLOADS = 2; // Reducido para Railway
-const MAX_FILE_SIZE = '50M'; // Límite de tamaño para Railway
-const MAX_DURATION = 3600; // 1 hora máximo
+const COOKIES_DIR = NODE_ENV === 'production'
+    ? '/tmp/cookies'
+    : path.join(__dirname, 'cookies');
+
+const MAX_CONCURRENT_DOWNLOADS = 1; // Reducido a 1 para evitar rate limiting
+const MAX_FILE_SIZE = '50M';
+const MAX_DURATION = 3600;
+
+// Configuración para evitar rate limiting
+const RATE_LIMIT_DELAY = 10000; // 10 segundos entre descargas
+let lastDownloadTime = 0;
 
 // Middleware
 app.use(cors({
@@ -41,7 +49,7 @@ app.use('/downloads', express.static(DOWNLOADS_DIR));
 // Trust proxy para Railway
 app.set('trust proxy', 1);
 
-// Health check para Railway
+// Health check
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
@@ -52,17 +60,44 @@ let activeDownloads = new Map();
 let downloadHistory = [];
 let connectedClients = new Set();
 
-// Crear directorio de descargas si no existe
-async function ensureDownloadsDir() {
+// Crear directorios necesarios
+async function ensureDirectories() {
     try {
         await fs.access(DOWNLOADS_DIR);
     } catch {
         await fs.mkdir(DOWNLOADS_DIR, { recursive: true });
         console.log(`📁 Directorio de descargas creado: ${DOWNLOADS_DIR}`);
     }
+    
+    try {
+        await fs.access(COOKIES_DIR);
+    } catch {
+        await fs.mkdir(COOKIES_DIR, { recursive: true });
+        console.log(`🍪 Directorio de cookies creado: ${COOKIES_DIR}`);
+    }
 }
 
-// Limpiar archivos antiguos (importante para Railway)
+// Crear archivo de cookies básico para evitar detección de bot
+async function setupCookies() {
+    const cookiesFile = path.join(COOKIES_DIR, 'youtube.txt');
+    
+    try {
+        await fs.access(cookiesFile);
+        console.log('✅ Archivo de cookies encontrado');
+        return cookiesFile;
+    } catch {
+        // Crear un archivo de cookies básico (vacío pero válido)
+        const basicCookies = `# Netscape HTTP Cookie File
+# This is a generated file! Do not edit.
+
+`;
+        await fs.writeFile(cookiesFile, basicCookies);
+        console.log('🍪 Archivo de cookies básico creado');
+        return cookiesFile;
+    }
+}
+
+// Limpiar archivos antiguos
 async function cleanupOldFiles() {
     try {
         const files = await fs.readdir(DOWNLOADS_DIR);
@@ -83,14 +118,13 @@ async function cleanupOldFiles() {
     }
 }
 
-// WebSocket para actualizaciones en tiempo real
+// WebSocket para actualizaciones
 wss.on('connection', (ws) => {
     connectedClients.add(ws);
     console.log('Cliente conectado via WebSocket');
     
     ws.on('close', () => {
         connectedClients.delete(ws);
-        console.log('Cliente desconectado');
     });
 
     ws.on('error', (error) => {
@@ -99,7 +133,6 @@ wss.on('connection', (ws) => {
     });
 });
 
-// Función para enviar actualizaciones a todos los clientes
 function broadcastUpdate(type, data) {
     const message = JSON.stringify({ type, data });
     connectedClients.forEach(client => {
@@ -107,14 +140,13 @@ function broadcastUpdate(type, data) {
             try {
                 client.send(message);
             } catch (error) {
-                console.error('Error enviando mensaje WebSocket:', error.message);
                 connectedClients.delete(client);
             }
         }
     });
 }
 
-// Verificar si yt-dlp está instalado
+// Verificar yt-dlp con mejores headers
 async function checkYtDlp() {
     const possiblePaths = [
         'yt-dlp',
@@ -123,49 +155,40 @@ async function checkYtDlp() {
         '/opt/venv/bin/yt-dlp'
     ];
     
-    // Intentar comandos directos
     for (const path of possiblePaths) {
         try {
             const { stdout } = await execAsync(`${path} --version`);
             console.log(`✅ yt-dlp encontrado en ${path}: ${stdout.trim()}`);
-            return path === 'yt-dlp' ? 'direct' : 'direct';
+            return 'direct';
         } catch (error) {
             continue;
         }
     }
     
-    // Intentar con python3 -m yt_dlp
     try {
         const { stdout } = await execAsync('python3 -m yt_dlp --version');
         console.log(`✅ yt-dlp via python3: ${stdout.trim()}`);
         return 'python3';
-    } catch (pythonError) {
-        console.log('yt-dlp no encontrado con python3 -m, intentando instalar...');
+    } catch (error) {
+        console.log('yt-dlp no encontrado, intentando instalar...');
+        return await installYtDlp();
     }
-    
-    // Si no está instalado, intentar instalar dinámicamente
-    console.log('yt-dlp no encontrado, intentando instalar...');
-    
+}
+
+async function installYtDlp() {
     const installMethods = [
-        // Método 1: pipx
+        // Método 1: pip con usuario
         async () => {
-            await execAsync('pipx install yt-dlp');
+            await execAsync('pip3 install --user --upgrade yt-dlp');
             process.env.PATH = `/root/.local/bin:${process.env.PATH}`;
         },
         // Método 2: pip con break-system-packages
         async () => {
-            await execAsync('pip3 install --break-system-packages yt-dlp');
+            await execAsync('pip3 install --break-system-packages --upgrade yt-dlp');
         },
-        // Método 3: entorno virtual
+        // Método 3: python -m pip
         async () => {
-            await execAsync('python3 -m venv /tmp/ytdlp-env');
-            await execAsync('source /tmp/ytdlp-env/bin/activate && pip install yt-dlp');
-            await execAsync('ln -sf /tmp/ytdlp-env/bin/yt-dlp /usr/local/bin/yt-dlp');
-        },
-        // Método 4: descarga directa
-        async () => {
-            await execAsync('curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp');
-            await execAsync('chmod +x /usr/local/bin/yt-dlp');
+            await execAsync('python3 -m pip install --user --upgrade yt-dlp');
         }
     ];
     
@@ -174,98 +197,77 @@ async function checkYtDlp() {
             console.log(`Intentando método de instalación ${i + 1}...`);
             await installMethods[i]();
             
-            // Verificar si funciona después de la instalación
-            for (const path of possiblePaths) {
+            // Verificar instalación
+            try {
+                await execAsync('yt-dlp --version');
+                console.log('✅ yt-dlp instalado exitosamente');
+                return 'direct';
+            } catch {
                 try {
-                    const { stdout } = await execAsync(`${path} --version`);
-                    console.log(`✅ yt-dlp instalado exitosamente en ${path}: ${stdout.trim()}`);
-                    return path === 'yt-dlp' ? 'direct' : 'direct';
-                } catch (error) {
+                    await execAsync('python3 -m yt_dlp --version');
+                    console.log('✅ yt-dlp via python3 instalado');
+                    return 'python3';
+                } catch {
                     continue;
                 }
             }
-            
-            // Intentar con python3 -m después de la instalación
-            try {
-                const { stdout } = await execAsync('python3 -m yt_dlp --version');
-                console.log(`✅ yt-dlp via python3: ${stdout.trim()}`);
-                return 'python3';
-            } catch (pythonError) {
-                continue;
-            }
-            
-        } catch (installError) {
-            console.log(`Método ${i + 1} falló: ${installError.message}`);
-            continue;
+        } catch (error) {
+            console.log(`Método ${i + 1} falló: ${error.message}`);
         }
     }
     
-    console.error('❌ No se pudo instalar yt-dlp con ningún método');
+    console.error('❌ No se pudo instalar yt-dlp');
     return false;
 }
 
-// Instalar yt-dlp si no está disponible (para Railway/Render)
-async function installYtDlp() {
-    try {
-        console.log('📦 Instalando yt-dlp...');
-        
-        // Intentar con pip3
-        try {
-            await execAsync('pip3 install --upgrade yt-dlp');
-            console.log('✅ yt-dlp instalado con pip3');
-            return true;
-        } catch (pipError) {
-            console.log('⚠️ pip3 falló, intentando con python3 -m pip');
-        }
-        
-        // Intentar con python3 -m pip
-        try {
-            await execAsync('python3 -m pip install --upgrade yt-dlp');
-            console.log('✅ yt-dlp instalado con python3 -m pip');
-            return true;
-        } catch (pythonError) {
-            console.log('⚠️ python3 -m pip falló, intentando con apt');
-        }
-        
-        // Último intento con apt (Ubuntu/Debian)
-        try {
-            await execAsync('apt-get update && apt-get install -y python3-pip');
-            await execAsync('pip3 install --upgrade yt-dlp');
-            console.log('✅ yt-dlp instalado después de actualizar pip');
-            return true;
-        } catch (aptError) {
-            console.error('❌ No se pudo instalar yt-dlp:', aptError.message);
-            return false;
-        }
-        
-    } catch (error) {
-        console.error('❌ Error instalando yt-dlp:', error.message);
-        return false;
+// Rate limiting para evitar 429
+async function waitForRateLimit() {
+    const now = Date.now();
+    const timeSinceLastDownload = now - lastDownloadTime;
+    
+    if (timeSinceLastDownload < RATE_LIMIT_DELAY) {
+        const waitTime = RATE_LIMIT_DELAY - timeSinceLastDownload;
+        console.log(`⏱️ Esperando ${waitTime/1000}s para evitar rate limiting...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
     }
+    
+    lastDownloadTime = Date.now();
 }
 
-// Obtener información del video con timeout
+// Obtener información del video con headers mejorados
 async function getVideoInfo(url) {
     try {
         const ytdlpAvailable = await checkYtDlp();
+        const cookiesFile = await setupCookies();
+        
         let command;
+        const baseArgs = [
+            '--dump-json',
+            '--no-playlist',
+            '--user-agent', '"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"',
+            '--referer', '"https://www.youtube.com/"',
+            '--cookies', cookiesFile,
+            '--extractor-retries', '3',
+            '--fragment-retries', '3',
+            '--retry-sleep', '5',
+            '--ignore-errors'
+        ];
         
         switch (ytdlpAvailable) {
             case 'direct':
-                command = `timeout 30 yt-dlp --dump-json --no-playlist "${url}"`;
+                command = `timeout 45 yt-dlp ${baseArgs.join(' ')} "${url}"`;
                 break;
             case 'python3':
-                command = `timeout 30 python3 -m yt_dlp --dump-json --no-playlist "${url}"`;
+                command = `timeout 45 python3 -m yt_dlp ${baseArgs.join(' ')} "${url}"`;
                 break;
             default:
-                throw new Error('yt-dlp no está disponible en el servidor. Verifica la instalación.');
+                throw new Error('yt-dlp no está disponible en el servidor');
         }
         
-        console.log(`Ejecutando: ${command}`);
+        console.log(`Obteniendo info: ${command}`);
         const { stdout } = await execAsync(command);
         const info = JSON.parse(stdout);
         
-        // Validar duración
         if (info.duration && info.duration > MAX_DURATION) {
             throw new Error(`Video demasiado largo. Máximo ${MAX_DURATION/60} minutos permitidos.`);
         }
@@ -280,11 +282,10 @@ async function getVideoInfo(url) {
         };
     } catch (error) {
         console.error('Error en getVideoInfo:', error.message);
-        throw new Error(`Error obteniendo información del video: ${error.message}`);
+        throw new Error(`Error obteniendo información: ${error.message}`);
     }
 }
 
-// Formatear duración
 function formatDuration(seconds) {
     if (!seconds) return 'Desconocido';
     const mins = Math.floor(seconds / 60);
@@ -292,13 +293,18 @@ function formatDuration(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// Descargar video/audio con límites para Railway/Render
+// Descargar con configuración anti-rate-limiting
 async function downloadMedia(url, options, downloadId) {
     return new Promise(async (resolve, reject) => {
         const { quality, format, isPlaylist } = options;
         
         try {
+            // Esperar para evitar rate limiting
+            await waitForRateLimit();
+            
             const ytdlpAvailable = await checkYtDlp();
+            const cookiesFile = await setupCookies();
+            
             let baseCommand = [];
             
             switch (ytdlpAvailable) {
@@ -309,7 +315,7 @@ async function downloadMedia(url, options, downloadId) {
                     baseCommand = ['python3', '-m', 'yt_dlp'];
                     break;
                 default:
-                    return reject(new Error('yt-dlp no está disponible en el servidor'));
+                    return reject(new Error('yt-dlp no está disponible'));
             }
             
             const command = [
@@ -324,24 +330,36 @@ async function downloadMedia(url, options, downloadId) {
                 '--add-metadata',
                 `--max-filesize=${MAX_FILE_SIZE}`,
                 '--abort-on-error',
-                '--no-check-certificate', // Para evitar problemas SSL en algunos entornos
-                '--socket-timeout', '30'
+                '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                '--referer', 'https://www.youtube.com/',
+                '--cookies', cookiesFile,
+                '--extractor-retries', '5',
+                '--fragment-retries', '5',
+                '--retry-sleep', '10',
+                '--sleep-interval', '5',
+                '--max-sleep-interval', '15',
+                '--ignore-errors',
+                '--no-check-certificate',
+                '--socket-timeout', '60'
             ];
 
             if (isPlaylist) {
-                command.push('--yes-playlist', '--max-downloads=3'); // Reducido para Render
+                command.push('--yes-playlist', '--max-downloads=2');
             } else {
                 command.push('--no-playlist');
             }
 
             command.push(url);
 
-            console.log(`Ejecutando descarga: ${command.join(' ')}`);
+            console.log(`🎵 Iniciando descarga: ${command.join(' ')}`);
             
-            // Cambiar el nombre de la variable de 'process' a 'childProcess'
             const childProcess = spawn(command[0], command.slice(1), {
-                timeout: 600000, // 10 minutos timeout
-                env: { ...process.env, PYTHONPATH: '/opt/venv/lib/python3.9/site-packages' }
+                timeout: 900000, // 15 minutos
+                env: { 
+                    ...process.env, 
+                    PYTHONPATH: '/opt/venv/lib/python3.9/site-packages',
+                    PYTHONIOENCODING: 'utf-8'
+                }
             });
             
             let output = '';
@@ -352,7 +370,6 @@ async function downloadMedia(url, options, downloadId) {
                 output += text;
                 console.log('STDOUT:', text);
                 
-                // Parsear progreso
                 const progressMatch = text.match(/\[download\]\s+(\d+\.?\d*)%/);
                 if (progressMatch) {
                     const progress = parseFloat(progressMatch[1]);
@@ -380,7 +397,18 @@ async function downloadMedia(url, options, downloadId) {
                     });
                     resolve({ success: true, output });
                 } else {
-                    reject(new Error(`yt-dlp falló con código ${code}: ${errorOutput}`));
+                    let errorMessage = `yt-dlp falló con código ${code}`;
+                    
+                    // Mensajes de error más específicos
+                    if (errorOutput.includes('429')) {
+                        errorMessage = 'Rate limit alcanzado. Intenta de nuevo en unos minutos.';
+                    } else if (errorOutput.includes('Sign in to confirm')) {
+                        errorMessage = 'YouTube requiere verificación. Intenta con otro video.';
+                    } else if (errorOutput.includes('Video unavailable')) {
+                        errorMessage = 'Video no disponible o privado.';
+                    }
+                    
+                    reject(new Error(errorMessage));
                 }
             });
 
@@ -389,7 +417,6 @@ async function downloadMedia(url, options, downloadId) {
                 reject(new Error(`Error ejecutando yt-dlp: ${error.message}`));
             });
 
-            // Guardar referencia del proceso con el nuevo nombre
             activeDownloads.set(downloadId, childProcess);
             
         } catch (error) {
@@ -398,9 +425,7 @@ async function downloadMedia(url, options, downloadId) {
     });
 }
 
-// Rutas de la API
-
-// Verificar estado del servidor
+// Rutas API mejoradas
 app.get('/api/status', async (req, res) => {
     const ytDlpAvailable = await checkYtDlp();
     res.json({
@@ -410,21 +435,19 @@ app.get('/api/status', async (req, res) => {
         ytDlpAvailable,
         activeDownloads: activeDownloads.size,
         queueLength: downloadQueue.length,
-        downloadsDir: DOWNLOADS_DIR
+        downloadsDir: DOWNLOADS_DIR,
+        rateLimitStatus: {
+            lastDownload: lastDownloadTime,
+            nextAvailable: Math.max(0, (lastDownloadTime + RATE_LIMIT_DELAY) - Date.now())
+        }
     });
 });
 
-// Obtener información del video
 app.post('/api/video-info', async (req, res) => {
     try {
         const { url } = req.body;
         
-        if (!url) {
-            return res.status(400).json({ error: 'URL es requerida' });
-        }
-
-        // Validar URL básica
-        if (!url.match(/^https?:\/\//)) {
+        if (!url || !url.match(/^https?:\/\//)) {
             return res.status(400).json({ error: 'URL inválida' });
         }
 
@@ -436,7 +459,6 @@ app.post('/api/video-info', async (req, res) => {
     }
 });
 
-// Agregar descarga a la cola
 app.post('/api/download', async (req, res) => {
     try {
         const { url, quality = '192', format = 'mp3', isPlaylist = false } = req.body;
@@ -445,9 +467,8 @@ app.post('/api/download', async (req, res) => {
             return res.status(400).json({ error: 'URL es requerida' });
         }
 
-        // Limitar cola para Railway
-        if (downloadQueue.length >= 10) {
-            return res.status(429).json({ error: 'Cola llena. Intenta más tarde.' });
+        if (downloadQueue.length >= 5) { // Reducido para evitar rate limiting
+            return res.status(429).json({ error: 'Cola llena. Máximo 5 descargas en cola.' });
         }
 
         const downloadId = `download_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -463,14 +484,13 @@ app.post('/api/download', async (req, res) => {
         };
 
         downloadQueue.push(downloadItem);
-        
-        // Procesar cola si hay capacidad
         processQueue();
         
         res.json({ 
             success: true, 
             downloadId,
-            position: downloadQueue.length 
+            position: downloadQueue.length,
+            estimatedWait: downloadQueue.length * (RATE_LIMIT_DELAY / 1000)
         });
     } catch (error) {
         console.error('Error agregando descarga:', error.message);
@@ -478,56 +498,37 @@ app.post('/api/download', async (req, res) => {
     }
 });
 
-// Obtener estado de la cola
 app.get('/api/queue', (req, res) => {
     res.json({
         queue: downloadQueue,
         active: Array.from(activeDownloads.keys()),
-        history: downloadHistory.slice(-20)
+        history: downloadHistory.slice(-20),
+        rateLimitInfo: {
+            delayBetweenDownloads: RATE_LIMIT_DELAY / 1000,
+            lastDownload: lastDownloadTime,
+            nextAvailable: Math.max(0, (lastDownloadTime + RATE_LIMIT_DELAY) - Date.now())
+        }
     });
 });
 
-// Cancelar descarga
 app.delete('/api/download/:downloadId', (req, res) => {
     const { downloadId } = req.params;
     
     try {
-        // Cancelar descarga activa
         if (activeDownloads.has(downloadId)) {
             const process = activeDownloads.get(downloadId);
             process.kill('SIGTERM');
             activeDownloads.delete(downloadId);
-            
             broadcastUpdate('cancelled', { downloadId });
         }
         
-        // Remover de la cola
         downloadQueue = downloadQueue.filter(item => item.id !== downloadId);
-        
         res.json({ success: true });
     } catch (error) {
-        console.error('Error cancelando descarga:', error.message);
         res.status(500).json({ error: error.message });
     }
 });
 
-// Limpiar cola
-app.delete('/api/queue', (req, res) => {
-    try {
-        // Solo permitir si no hay descargas activas
-        if (activeDownloads.size > 0) {
-            return res.status(400).json({ error: 'No se puede limpiar la cola con descargas activas' });
-        }
-        
-        downloadQueue = [];
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Error limpiando cola:', error.message);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Listar archivos descargados
 app.get('/api/downloads', async (req, res) => {
     try {
         const files = await fs.readdir(DOWNLOADS_DIR);
@@ -551,87 +552,21 @@ app.get('/api/downloads', async (req, res) => {
         const validFiles = fileDetails.filter(f => f !== null);
         res.json(validFiles.sort((a, b) => b.created - a.created));
     } catch (error) {
-        console.error('Error listando archivos:', error.message);
         res.status(500).json({ error: error.message });
     }
 });
 
-// Descargar archivo
-app.get('/api/download-file/:filename', (req, res) => {
-    const filename = req.params.filename;
-    const filePath = path.join(DOWNLOADS_DIR, filename);
-    
-    res.download(filePath, (err) => {
-        if (err) {
-            console.error('Error descargando archivo:', err.message);
-            res.status(404).json({ error: 'Archivo no encontrado' });
-        }
-    });
-});
-
-
-// Cancelar descarga - Ruta API
-app.delete('/api/download/:downloadId', (req, res) => {
-    const { downloadId } = req.params;
-    
-    try {
-        // Cancelar descarga activa
-        if (activeDownloads.has(downloadId)) {
-            const childProcess = activeDownloads.get(downloadId);
-            childProcess.kill('SIGTERM');
-            activeDownloads.delete(downloadId);
-            
-            broadcastUpdate('cancelled', { downloadId });
-        }
-        
-        // Remover de la cola
-        downloadQueue = downloadQueue.filter(item => item.id !== downloadId);
-        
-        res.json({ success: true });
-    } catch (error) {
-        console.error('Error cancelando descarga:', error.message);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Función de cierre graceful actualizada
-function gracefulShutdown() {
-    // Cancelar descargas activas
-    activeDownloads.forEach((childProcess, id) => {
-        console.log(`Cancelando descarga ${id}`);
-        try {
-            childProcess.kill('SIGTERM');
-        } catch (error) {
-            console.error(`Error cancelando descarga ${id}:`, error.message);
-        }
-    });
-    
-    server.close(() => {
-        console.log('✅ Servidor cerrado correctamente');
-        process.exit(0);
-    });
-    
-    // Forzar cierre después de 10 segundos
-    setTimeout(() => {
-        console.log('🔴 Forzando cierre del servidor');
-        process.exit(1);
-    }, 10000);
-}
-
-// Procesar cola de descargas
+// Procesar cola con rate limiting
 async function processQueue() {
-    // Verificar si podemos procesar más descargas
     if (activeDownloads.size >= MAX_CONCURRENT_DOWNLOADS) {
         return;
     }
     
-    // Buscar siguiente item en cola
     const nextItem = downloadQueue.find(item => item.status === 'queued');
     if (!nextItem) {
         return;
     }
     
-    // Marcar como procesando
     nextItem.status = 'downloading';
     nextItem.startedAt = new Date().toISOString();
     
@@ -644,12 +579,9 @@ async function processQueue() {
             isPlaylist: nextItem.isPlaylist
         }, nextItem.id);
         
-        // Mover a historial
         nextItem.status = 'completed';
         nextItem.completedAt = new Date().toISOString();
         downloadHistory.push(nextItem);
-        
-        // Remover de cola
         downloadQueue = downloadQueue.filter(item => item.id !== nextItem.id);
         
         broadcastUpdate('completed', { downloadId: nextItem.id });
@@ -668,78 +600,22 @@ async function processQueue() {
     } finally {
         activeDownloads.delete(nextItem.id);
         
-        // Continuar procesando cola
-        setTimeout(processQueue, 1000);
+        // Esperar antes de procesar siguiente
+        setTimeout(processQueue, 2000);
     }
 }
 
-// Servir frontend estático
+// Servir frontend
 if (NODE_ENV === 'production') {
     app.use(express.static(path.join(__dirname, 'public')));
-    
-    // Ruta catch-all para SPA
     app.get('*', (req, res) => {
         res.sendFile(path.join(__dirname, 'public', 'index.html'));
     });
 }
 
-// Iniciar servidor
-async function startServer() {
-    try {
-        await ensureDownloadsDir();
-        
-        let ytDlpAvailable = await checkYtDlp();
-        
-        // Intentar instalar yt-dlp si no está disponible
-        if (!ytDlpAvailable && NODE_ENV === 'production') {
-            ytDlpAvailable = await installYtDlp();
-        }
-        
-        if (!ytDlpAvailable) {
-            console.warn('⚠️  yt-dlp no está disponible. Instálalo para funcionalidad completa.');
-        }
-        
-        // Limpiar archivos antiguos cada 30 minutos
-        setInterval(cleanupOldFiles, 30 * 60 * 1000);
-        
-        server.listen(PORT, '0.0.0.0', () => {
-            console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
-            console.log(`🌍 Entorno: ${NODE_ENV}`);
-            console.log(`🔧 Plataforma: ${PLATFORM}`);
-            console.log(`📁 Directorio de descargas: ${DOWNLOADS_DIR}`);
-            console.log(`🎵 yt-dlp disponible: ${ytDlpAvailable ? '✅' : '❌'}`);
-        });
-        
-    } catch (error) {
-        console.error('❌ Error iniciando servidor:', error);
-        process.exit(1);
-    }
-}
-
-// Manejo de errores no capturados
-process.on('uncaughtException', (error) => {
-    console.error('Error no capturado:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Promesa rechazada no manejada:', reason);
-});
-
-// Limpieza al cerrar
-process.on('SIGTERM', () => {
-    console.log('\n🛑 Cerrando servidor (SIGTERM)...');
-    gracefulShutdown();
-});
-
-process.on('SIGINT', () => {
-    console.log('\n🛑 Cerrando servidor (SIGINT)...');
-    gracefulShutdown();
-});
-
+// Graceful shutdown
 function gracefulShutdown() {
-    // Cancelar descargas activas
     activeDownloads.forEach((process, id) => {
-        console.log(`Cancelando descarga ${id}`);
         try {
             process.kill('SIGTERM');
         } catch (error) {
@@ -752,11 +628,38 @@ function gracefulShutdown() {
         process.exit(0);
     });
     
-    // Forzar cierre después de 10 segundos
     setTimeout(() => {
-        console.log('🔴 Forzando cierre del servidor');
         process.exit(1);
     }, 10000);
 }
+
+async function startServer() {
+    try {
+        await ensureDirectories();
+        await setupCookies();
+        
+        let ytDlpAvailable = await checkYtDlp();
+        
+        if (!ytDlpAvailable) {
+            console.warn('⚠️ yt-dlp no disponible');
+        }
+        
+        setInterval(cleanupOldFiles, 30 * 60 * 1000);
+        
+        server.listen(PORT, '0.0.0.0', () => {
+            console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
+            console.log(`🌍 Entorno: ${NODE_ENV}`);
+            console.log(`🔧 Rate limiting: ${RATE_LIMIT_DELAY/1000}s entre descargas`);
+            console.log(`🎵 yt-dlp: ${ytDlpAvailable ? '✅' : '❌'}`);
+        });
+        
+    } catch (error) {
+        console.error('❌ Error iniciando servidor:', error);
+        process.exit(1);
+    }
+}
+
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
 
 startServer().catch(console.error);
