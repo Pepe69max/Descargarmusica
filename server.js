@@ -13,10 +13,10 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Configuración para Railway
+// Configuración para Render/Railway
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const RAILWAY_ENVIRONMENT = process.env.RAILWAY_ENVIRONMENT || 'development';
+const PLATFORM = process.env.RENDER || process.env.RAILWAY_ENVIRONMENT || 'development';
 
 // Directorio de descargas - usar /tmp en Railway para archivos temporales
 const DOWNLOADS_DIR = NODE_ENV === 'production' 
@@ -257,7 +257,7 @@ app.get('/api/status', async (req, res) => {
     res.json({
         status: 'ok',
         environment: NODE_ENV,
-        railway: RAILWAY_ENVIRONMENT,
+        platform: PLATFORM,
         ytDlpAvailable,
         activeDownloads: activeDownloads.size,
         queueLength: downloadQueue.length,
@@ -520,7 +520,7 @@ async function startServer() {
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
             console.log(`🌍 Entorno: ${NODE_ENV}`);
-            console.log(`🚂 Railway: ${RAILWAY_ENVIRONMENT}`);
+            console.log(`🔧 Plataforma: ${PLATFORM}`);
             console.log(`📁 Directorio de descargas: ${DOWNLOADS_DIR}`);
             console.log(`🎵 yt-dlp disponible: ${ytDlpAvailable ? '✅' : '❌'}`);
         });
