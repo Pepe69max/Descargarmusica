@@ -115,36 +115,93 @@ function broadcastUpdate(type, data) {
 }
 
 // Verificar si yt-dlp está instalado
-// Reemplazar la función checkYtDlp existente con esta versión mejorada:
 async function checkYtDlp() {
-    try {
-        // Primero intentar con yt-dlp directamente
-        const { stdout } = await execAsync('yt-dlp --version');
-        console.log(`✅ yt-dlp version: ${stdout.trim()}`);
-        return 'direct';
-    } catch (error) {
-        console.log('yt-dlp directo no encontrado, intentando con python3...');
-        
-        // Intentar con python3 -m yt_dlp
+    const possiblePaths = [
+        'yt-dlp',
+        '/usr/local/bin/yt-dlp',
+        '/root/.local/bin/yt-dlp',
+        '/opt/venv/bin/yt-dlp'
+    ];
+    
+    // Intentar comandos directos
+    for (const path of possiblePaths) {
         try {
-            const { stdout } = await execAsync('python3 -m yt_dlp --version');
-            console.log(`✅ yt-dlp via python3: ${stdout.trim()}`);
-            return 'python3';
-        } catch (pythonError) {
-            console.log('Intentando instalar yt-dlp...');
-            
-            // Intentar instalar yt-dlp
-            try {
-                await execAsync('pip3 install --user yt-dlp');
-                const { stdout } = await execAsync('python3 -m yt_dlp --version');
-                console.log(`✅ yt-dlp instalado y funcionando: ${stdout.trim()}`);
-                return 'python3';
-            } catch (installError) {
-                console.error('❌ No se pudo instalar yt-dlp:', installError.message);
-                return false;
-            }
+            const { stdout } = await execAsync(`${path} --version`);
+            console.log(`✅ yt-dlp encontrado en ${path}: ${stdout.trim()}`);
+            return path === 'yt-dlp' ? 'direct' : 'direct';
+        } catch (error) {
+            continue;
         }
     }
+    
+    // Intentar con python3 -m yt_dlp
+    try {
+        const { stdout } = await execAsync('python3 -m yt_dlp --version');
+        console.log(`✅ yt-dlp via python3: ${stdout.trim()}`);
+        return 'python3';
+    } catch (pythonError) {
+        console.log('yt-dlp no encontrado con python3 -m, intentando instalar...');
+    }
+    
+    // Si no está instalado, intentar instalar dinámicamente
+    console.log('yt-dlp no encontrado, intentando instalar...');
+    
+    const installMethods = [
+        // Método 1: pipx
+        async () => {
+            await execAsync('pipx install yt-dlp');
+            process.env.PATH = `/root/.local/bin:${process.env.PATH}`;
+        },
+        // Método 2: pip con break-system-packages
+        async () => {
+            await execAsync('pip3 install --break-system-packages yt-dlp');
+        },
+        // Método 3: entorno virtual
+        async () => {
+            await execAsync('python3 -m venv /tmp/ytdlp-env');
+            await execAsync('source /tmp/ytdlp-env/bin/activate && pip install yt-dlp');
+            await execAsync('ln -sf /tmp/ytdlp-env/bin/yt-dlp /usr/local/bin/yt-dlp');
+        },
+        // Método 4: descarga directa
+        async () => {
+            await execAsync('curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp');
+            await execAsync('chmod +x /usr/local/bin/yt-dlp');
+        }
+    ];
+    
+    for (let i = 0; i < installMethods.length; i++) {
+        try {
+            console.log(`Intentando método de instalación ${i + 1}...`);
+            await installMethods[i]();
+            
+            // Verificar si funciona después de la instalación
+            for (const path of possiblePaths) {
+                try {
+                    const { stdout } = await execAsync(`${path} --version`);
+                    console.log(`✅ yt-dlp instalado exitosamente en ${path}: ${stdout.trim()}`);
+                    return path === 'yt-dlp' ? 'direct' : 'direct';
+                } catch (error) {
+                    continue;
+                }
+            }
+            
+            // Intentar con python3 -m después de la instalación
+            try {
+                const { stdout } = await execAsync('python3 -m yt_dlp --version');
+                console.log(`✅ yt-dlp via python3: ${stdout.trim()}`);
+                return 'python3';
+            } catch (pythonError) {
+                continue;
+            }
+            
+        } catch (installError) {
+            console.log(`Método ${i + 1} falló: ${installError.message}`);
+            continue;
+        }
+    }
+    
+    console.error('❌ No se pudo instalar yt-dlp con ningún método');
+    return false;
 }
 
 // Instalar yt-dlp si no está disponible (para Railway/Render)
