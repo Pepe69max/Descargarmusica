@@ -6,28 +6,19 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "install-ytdlp": "npm run install-ytdlp-unix || npm run install-ytdlp-windows",
-    "install-ytdlp-unix": "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && chmod a+rx /usr/local/bin/yt-dlp",
-    "install-ytdlp-windows": "echo 'Descarga yt-dlp desde https://github.com/yt-dlp/yt-dlp/releases y agrégalo al PATH'"
+    "build": "echo 'No build needed'",
+    "postinstall": "apt-get update && apt-get install -y python3 python3-pip && pip3 install yt-dlp || npm run install-ytdlp-manual",
+    "install-ytdlp-manual": "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && chmod a+rx /usr/local/bin/yt-dlp"
   },
-  "keywords": [
-    "youtube",
-    "downloader",
-    "mp3",
-    "music",
-    "yt-dlp"
-  ],
-  "author": "Gastón Romero",
+  "keywords": ["youtube", "downloader", "mp3", "music", "yt-dlp"],
+  "author": "Tu Nombre",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "ws": "^8.14.2"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   }
 }
